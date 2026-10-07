@@ -2,9 +2,9 @@ name: Android Build & Release
 
 on:
   push:
-    branches: [ master]
+    branches: [master]
   pull_request:
-    branches: [ master]
+    branches: [master]
   workflow_dispatch:
 
 jobs:
@@ -23,9 +23,16 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          # 'tools' package mat maango — ab exist nahi karta
 
-      # Repo ke andar settings.gradle dhoond kar Gradle project ka root pata karta hai.
-      # Isse fark nahi padta ki project root me hai ya kisi subfolder (jaise android-gps-copy) me.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.9'
+
       - name: Locate Gradle project
         id: findroot
         run: |
@@ -39,43 +46,9 @@ jobs:
           echo "Gradle project root: $DIR"
           echo "project_dir=$DIR" >> "$GITHUB_OUTPUT"
 
-      # gradle-wrapper.jar git me commit nahi hota, isliye yahan download karte hai.
-      - name: Setup Gradle Wrapper
-        working-directory: ${{ steps.findroot.outputs.project_dir }}
-        run: |
-          mkdir -p gradle/wrapper
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            curl -L -o gradle/wrapper/gradle-wrapper.jar \
-              "https://raw.githubusercontent.com/gradle/gradle/v8.9.0/gradle/wrapper/gradle-wrapper.jar"
-          fi
-          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
-            cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
-          networkTimeout=10000
-          validateDistributionUrl=true
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          fi
-
-      - name: Create gradlew script
-        working-directory: ${{ steps.findroot.outputs.project_dir }}
-        run: |
-          if [ ! -f gradlew ]; then
-            cat > gradlew <<'EOF'
-          #!/bin/sh
-          DIRNAME=$(dirname "$0")
-          CLASSPATH=$DIRNAME/gradle/wrapper/gradle-wrapper.jar
-          exec java -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
-          EOF
-          fi
-          chmod +x gradlew
-
       - name: Build Debug APK
         working-directory: ${{ steps.findroot.outputs.project_dir }}
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
