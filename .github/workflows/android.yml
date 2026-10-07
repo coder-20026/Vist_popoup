@@ -21,8 +21,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # FIX: 'tools' package ab Android SDK me exist nahi karta.
-      # Isliye sirf 'platform-tools' maango aur licenses accept karo.
+      # FIX 1: 'tools' package ab Android SDK me exist nahi karta.
+      # Sirf 'platform-tools' maango aur licenses accept karo.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -30,8 +30,14 @@ jobs:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      # Repo ke andar settings.gradle dhoond kar Gradle project ka root pata karta hai.
-      # Isse fark nahi padta ki project root me hai ya kisi subfolder (jaise android-gps-copy) me.
+      # FIX 2: Gradle khud install karo — wrapper jar banane ki zaroorat nahi.
+      # Ye action Gradle ko PATH me daal deta hai aur cache bhi handle karta hai.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Repo ke andar settings.gradle dhoond kar Gradle project ka root pata karo.
       - name: Locate Gradle project
         id: findroot
         run: |
@@ -45,68 +51,10 @@ jobs:
           echo "Gradle project root: $DIR"
           echo "project_dir=$DIR" >> "$GITHUB_OUTPUT"
 
-      # FIX: Gradle wrapper jar + properties setup.
-      # Note: Gradle repo me wrapper jar commit nahi hota, isliye
-      # raw.githubusercontent URL ki jagah direct distribution se use karte hai.
-      - name: Setup Gradle Wrapper
-        working-directory: ${{ steps.findroot.outputs.project_dir }}
-        run: |
-          mkdir -p gradle/wrapper
-
-          if [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
-            cat > gradle/wrapper/gradle-wrapper.properties <<'EOF'
-          distributionBase=GRADLE_USER_HOME
-          distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
-          networkTimeout=10000
-          validateDistributionUrl=true
-          zipStoreBase=GRADLE_USER_HOME
-          zipStorePath=wrapper/dists
-          EOF
-          fi
-
-          # Wrapper jar download karo (agar repo me committed nahi hai).
-          # Ye jar Gradle 8.9 distribution ke andar hoti hai — reliable source.
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            curl -fL -o /tmp/gradle-8.9-bin.zip \
-              "https://services.gradle.org/distributions/gradle-8.9-bin.zip"
-            unzip -o -q /tmp/gradle-8.9-bin.zip -d /tmp/gradle-extract
-            cp /tmp/gradle-extract/gradle-8.9/lib/plugins/gradle-wrapper-*.jar \
-               gradle/wrapper/gradle-wrapper.jar 2>/dev/null || \
-            cp /tmp/gradle-extract/gradle-8.9/lib/gradle-wrapper-*.jar \
-               gradle/wrapper/gradle-wrapper.jar 2>/dev/null || \
-            (echo "Wrapper jar nahi mili — direct gradle use karenge" && exit 0)
-          fi
-
-      # Complete gradlew script (aapki purani script incomplete thi).
-      - name: Create gradlew script
-        working-directory: ${{ steps.findroot.outputs.project_dir }}
-        run: |
-          if [ ! -f gradlew ]; then
-            cat > gradlew <<'EOF'
-          #!/bin/sh
-          DIRNAME=$(cd "$(dirname "$0")" && pwd)
-          APP_HOME=$DIRNAME
-          CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
-
-          if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
-            JAVACMD=$JAVA_HOME/bin/java
-          else
-            JAVACMD=java
-          fi
-
-          exec "$JAVACMD" \
-            -Dorg.gradle.appname=gradlew \
-            -classpath "$CLASSPATH" \
-            org.gradle.wrapper.GradleWrapperMain \
-            "$@"
-          EOF
-          fi
-          chmod +x gradlew
-
+      # FIX 3: Wrapper ki jagah system-installed 'gradle' command use karo.
       - name: Build Debug APK
         working-directory: ${{ steps.findroot.outputs.project_dir }}
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
