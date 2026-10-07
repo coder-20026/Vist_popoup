@@ -369,7 +369,7 @@ class FieldFloatingService : Service() {
         val etLocationName = view.findViewById<EditText>(R.id.et_location_name)
         val tvGpsPlaceholder = view.findViewById<TextView>(R.id.tv_gps_placeholder)
         val btnCopyReport = view.findViewById<Button>(R.id.btn_copy_report)
-        val scrollReport = view.findViewById<ScrollView>(R.id.scroll_report)
+        val scrollReport = view.findViewById<View>(R.id.scroll_report)
 
         // Ensure popup scroll content does not overflow screen boundaries
         scrollReport?.let { scroll ->
@@ -377,7 +377,7 @@ class FieldFloatingService : Service() {
             scroll.viewTreeObserver.addOnGlobalLayoutListener {
                 if (scroll.height > maxScrollHeight) {
                     val lp = scroll.layoutParams
-                    if (lp.height != maxScrollHeight) {
+                    if (lp != null && lp.height != maxScrollHeight) {
                         lp.height = maxScrollHeight
                         scroll.layoutParams = lp
                     }
