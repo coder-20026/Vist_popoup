@@ -33,7 +33,6 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Space
 import android.widget.TextView
@@ -370,10 +369,10 @@ class FieldFloatingService : Service() {
         val etLocationName = view.findViewById<EditText>(R.id.et_location_name)
         val tvGpsPlaceholder = view.findViewById<TextView>(R.id.tv_gps_placeholder)
         val btnCopyReport = view.findViewById<Button>(R.id.btn_copy_report)
-        val scrollReport = view.findViewById<ScrollView>(R.id.scroll_report)
+        val scrollReport = view.findViewById<View>(R.id.scroll_report)
 
         // Ensure popup scroll content does not overflow screen boundaries
-        scrollReport?.let { scroll: ScrollView ->
+        scrollReport?.let { scroll ->
             val maxScrollHeight = (resources.displayMetrics.heightPixels * 0.62).toInt()
             scroll.viewTreeObserver.addOnGlobalLayoutListener {
                 if (scroll.height > maxScrollHeight) {
