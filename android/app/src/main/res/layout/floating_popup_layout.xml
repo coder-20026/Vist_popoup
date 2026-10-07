@@ -155,7 +155,7 @@
                     android:textColor="#38BDF8"
                     android:textStyle="bold"
                     android:hint="Truhome fin"
-                    android:hintTextColor="#475569"
+                    android:textColorHint="#475569"
                     android:textSize="13sp"
                     android:singleLine="true"
                     android:imeOptions="actionNext" />
@@ -218,7 +218,7 @@
                     android:paddingHorizontal="8dp"
                     android:textColor="#FFFFFF"
                     android:hint="Hareshbhai"
-                    android:hintTextColor="#475569"
+                    android:textColorHint="#475569"
                     android:textSize="13sp"
                     android:singleLine="true"
                     android:imeOptions="actionNext" />
@@ -249,7 +249,7 @@
                     android:paddingHorizontal="8dp"
                     android:textColor="#FFFFFF"
                     android:hint="Jasdan"
-                    android:hintTextColor="#475569"
+                    android:textColorHint="#475569"
                     android:textSize="13sp"
                     android:singleLine="true"
                     android:imeOptions="actionDone" />
