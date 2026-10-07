@@ -61,7 +61,11 @@ fun MainScreen(
     onCopyTable: () -> Unit,
     tableCopied: Boolean,
     errorMsg: String,
-    setErrorMsg: (String) -> Unit
+    setErrorMsg: (String) -> Unit,
+    hasOverlayPermission: Boolean,
+    isFloatingPopupActive: Boolean,
+    onRequestOverlayPermission: () -> Unit,
+    onToggleFloatingPopup: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -138,6 +142,14 @@ fun MainScreen(
         ) {
             // Brand Title / Header
             HeaderBlock()
+
+            // Quick Settings Tile & Floating Popup (Part 1)
+            QuickTileOverlayCard(
+                hasOverlayPermission = hasOverlayPermission,
+                isFloatingActive = isFloatingPopupActive,
+                onRequestOverlayPermission = onRequestOverlayPermission,
+                onToggleFloatingPopup = onToggleFloatingPopup
+            )
 
             // 2. Collapsible Settings Card
             SettingsCard(
@@ -1225,3 +1237,141 @@ fun EditableTableCell(
         )
     )
 }
+
+@Composable
+fun QuickTileOverlayCard(
+    hasOverlayPermission: Boolean,
+    isFloatingActive: Boolean,
+    onRequestOverlayPermission: () -> Unit,
+    onToggleFloatingPopup: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, BorderColor, RoundedCornerShape(12.dp)),
+        colors = CardDefaults.cardColors(containerColor = SurfaceWhite),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(AccentBlue),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Quick Settings Tile",
+                            tint = PrimaryBlue,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Quick Settings Tile & Floating Popup",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextDark
+                        )
+                        Text(
+                            text = "Part 10 • Final Integration & Reliability Audited",
+                            fontSize = 11.sp,
+                            color = TextMuted
+                        )
+                    }
+                }
+
+                // Permission Status Chip
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(
+                            if (hasOverlayPermission) Color(0xFFDCFCE7) else Color(0xFFFEF3C7)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = if (hasOverlayPermission) "Ready" else "Permission Needed",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (hasOverlayPermission) Color(0xFF15803D) else Color(0xFFB45309)
+                    )
+                }
+            }
+
+            // Description / Instructions
+            Text(
+                text = "Android Quick Settings Panel me 'Field Work' tile add karke aap WhatsApp ya kisi bhi app ke upar floating popup open kar sakte hain.",
+                fontSize = 12.sp,
+                color = TextMuted,
+                lineHeight = 16.sp
+            )
+
+            if (!hasOverlayPermission) {
+                Button(
+                    onClick = onRequestOverlayPermission,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                ) {
+                    Text(
+                        text = "Display Over Other Apps Permission Do",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                Button(
+                    onClick = onToggleFloatingPopup,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isFloatingActive) DestructiveRed else PrimaryBlue
+                    )
+                ) {
+                    Text(
+                        text = if (isFloatingActive) "Close Floating Popup" else "Test Floating Popup",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Quick Setup Guide
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(BackgroundLight)
+                    .padding(10.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Tile Add Karne Ka Tarika:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextDark
+                    )
+                    Text(
+                        text = "1. Phone ki Quick Settings (Notification Shade) pull down karein\n2. Edit (pencil) dabayein aur 'Field Work' tile ko active panel me dalein\n3. Ab WhatsApp par kaam karte waqt tile dabakar floating popup use karein",
+                        fontSize = 11.sp,
+                        color = TextMuted,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
