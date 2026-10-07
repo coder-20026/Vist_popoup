@@ -32,6 +32,15 @@ class GpsNotificationService : Service() {
         const val ACTION_STOP = "com.whatsapptoexcel.app.ACTION_STOP"
         const val ACTION_COPY = "com.whatsapptoexcel.app.ACTION_COPY"
         const val ACTION_REFRESH = "com.whatsapptoexcel.app.ACTION_REFRESH"
+
+        @Volatile
+        var lastKnownGpsCoordinates: String = ""
+
+        @Volatile
+        var lastKnownLatitude: String = ""
+
+        @Volatile
+        var lastKnownLongitude: String = ""
     }
 
     override fun onCreate() {
@@ -114,7 +123,12 @@ class GpsNotificationService : Service() {
     }
 
     private fun updateLocation(loc: Location) {
-        lastKnownLocationText = String.format(Locale.US, "%.4f,%.4f", loc.latitude, loc.longitude)
+        val lat = String.format(Locale.US, "%.4f", loc.latitude)
+        val lon = String.format(Locale.US, "%.4f", loc.longitude)
+        lastKnownLatitude = lat
+        lastKnownLongitude = lon
+        lastKnownLocationText = "$lat,$lon"
+        lastKnownGpsCoordinates = lastKnownLocationText
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, buildNotification(lastKnownLocationText))
     }

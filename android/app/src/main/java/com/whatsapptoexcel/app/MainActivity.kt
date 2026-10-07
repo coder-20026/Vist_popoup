@@ -54,6 +54,10 @@ class MainActivity : ComponentActivity() {
     private var tableCopied by mutableStateOf(false)
     private var errorMsg by mutableStateOf("")
 
+    // Quick Settings Tile & Floating Popup State (Part 1)
+    private var hasOverlayPermission by mutableStateOf(false)
+    private var isFloatingPopupActive by mutableStateOf(false)
+
     // Track the Excel bytes loaded for PDF conversion
     private var excelBytesForPdf: ByteArray? = null
 
@@ -97,6 +101,9 @@ class MainActivity : ComponentActivity() {
         } else {
             currentGps = ""
         }
+
+        hasOverlayPermission = OverlayPermissionHelper.canDrawOverlays(this)
+        isFloatingPopupActive = FieldFloatingService.isRunning
 
         setContent {
             WhatsAppToExcelTheme {
@@ -155,10 +162,36 @@ class MainActivity : ComponentActivity() {
                     onCopyTable = { copyTableToClipboard() },
                     tableCopied = tableCopied,
                     errorMsg = errorMsg,
-                    setErrorMsg = { errorMsg = it }
+                    setErrorMsg = { errorMsg = it },
+                    hasOverlayPermission = hasOverlayPermission,
+                    isFloatingPopupActive = isFloatingPopupActive,
+                    onRequestOverlayPermission = {
+                        val intent = OverlayPermissionHelper.createOverlaySettingsIntent(this)
+                        startActivity(intent)
+                    },
+                    onToggleFloatingPopup = {
+                        if (FieldFloatingService.isRunning) {
+                            FieldFloatingService.stopService(this)
+                            isFloatingPopupActive = false
+                        } else {
+                            if (!OverlayPermissionHelper.canDrawOverlays(this)) {
+                                val intent = OverlayPermissionHelper.createOverlaySettingsIntent(this)
+                                startActivity(intent)
+                            } else {
+                                FieldFloatingService.startService(this)
+                                isFloatingPopupActive = true
+                            }
+                        }
+                    }
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hasOverlayPermission = OverlayPermissionHelper.canDrawOverlays(this)
+        isFloatingPopupActive = FieldFloatingService.isRunning
     }
 
     private fun refreshGpsLocation() {

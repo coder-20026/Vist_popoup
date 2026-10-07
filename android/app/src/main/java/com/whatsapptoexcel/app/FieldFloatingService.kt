@@ -1,0 +1,1181 @@
+package com.whatsapptoexcel.app
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
+import android.os.Build
+import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.text.Editable
+import android.text.InputFilter
+import android.text.InputType
+import android.text.TextWatcher
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.Space
+import android.widget.TextView
+import android.widget.Toast
+import androidx.core.app.NotificationCompat
+import com.google.android.gms.location.LocationServices
+import java.util.Locale
+
+/**
+ * Foreground Service responsible for displaying, positioning, and managing
+ * the floating overlay popup for Field Work.
+ * PART 2: Editable Field Work Report Template with local draft persistence.
+ */
+class FieldFloatingService : Service() {
+
+    private var windowManager: WindowManager? = null
+    private var floatingView: View? = null
+    private var layoutParams: WindowManager.LayoutParams? = null
+
+    private lateinit var draftRepository: ReportDraftRepository
+    private var currentDraft = ReportDraft()
+    private var reportLines: MutableList<ReportLineItem> = mutableListOf()
+    private var linesContainerView: LinearLayout? = null
+    private var forceCopyAllowed: Boolean = false
+    private var currentErrorIndices: Set<Int> = emptySet()
+
+    private fun dpToPx(dp: Int): Int = (dp * resources.displayMetrics.density).toInt()
+
+    private fun triggerLongVibration() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vibratorManager?.defaultVibrator?.vibrate(
+                    VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE)
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                vibrator?.vibrate(
+                    VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                vibrator?.vibrate(500)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun getMissingRequiredLineIndices(): Set<Int> {
+        val missing = mutableSetOf<Int>()
+        reportLines.forEachIndexed { index, line ->
+            when (line.type) {
+                ReportLineType.APPLICANT -> {
+                    if (line.text.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.MALNAR -> {
+                    if (line.text.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.FAMILY -> {
+                    if (line.text.trim().isEmpty() || line.extraData.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.HOME_TYPE -> {
+                    if (line.text.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.RESIDENCE -> {
+                    if (line.text.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.HOME_OWNERSHIP -> {
+                    if (line.text.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.RENT -> {
+                    if (currentDraft.isHomeRent && line.text.trim().isEmpty()) missing.add(index)
+                }
+                ReportLineType.CUSTOM -> {
+                    // Custom lines are optional extra information (not required)
+                }
+            }
+        }
+        return missing
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        draftRepository = ReportDraftRepository(this)
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ACTION_START
+
+        when (action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                // Verify overlay permission
+                if (!OverlayPermissionHelper.canDrawOverlays(this)) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                if (isRunning && floatingView != null && floatingView?.isAttachedToWindow == true) {
+                    // Popup is already open on screen:
+                    // Prevent duplicate popup creation and reuse existing popup
+                    reuseExistingPopup()
+                    FieldWorkTileService.requestListeningState(this)
+                    return START_NOT_STICKY
+                }
+
+                startInForeground()
+                showFloatingPopup()
+                isRunning = true
+                FieldWorkTileService.requestListeningState(this)
+            }
+            ACTION_TOGGLE -> {
+                if (isRunning) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                if (!OverlayPermissionHelper.canDrawOverlays(this)) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                startInForeground()
+                showFloatingPopup()
+                isRunning = true
+                FieldWorkTileService.requestListeningState(this)
+            }
+        }
+
+        return START_NOT_STICKY
+    }
+
+    private fun reuseExistingPopup() {
+        try {
+            floatingView?.let { view ->
+                if (view.isAttachedToWindow && layoutParams != null) {
+                    // Bring existing popup to front and ensure layout is synced
+                    windowManager?.updateViewLayout(view, layoutParams)
+                    // Visual pulse animation confirms the existing popup is reused
+                    view.animate()
+                        .scaleX(1.02f)
+                        .scaleY(1.02f)
+                        .setDuration(120)
+                        .withEndAction {
+                            view.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start()
+                        }
+                        .start()
+                    Toast.makeText(this, "Field Work popup already active", Toast.LENGTH_SHORT).show()
+                } else {
+                    removeFloatingPopup()
+                    showFloatingPopup()
+                }
+            } ?: run {
+                showFloatingPopup()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            removeFloatingPopup()
+            showFloatingPopup()
+        }
+    }
+
+    private fun startInForeground() {
+        val notification = buildForegroundNotification()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun showFloatingPopup() {
+        if (floatingView != null) {
+            if (floatingView?.isAttachedToWindow == true) {
+                // Already attached to window! Prevent duplicate overlay
+                return
+            } else {
+                floatingView = null
+            }
+        }
+
+        try {
+            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val inflater = LayoutInflater.from(this)
+            val view = inflater.inflate(R.layout.floating_popup_layout, null)
+            floatingView = view
+
+            val displayMetrics = resources.displayMetrics
+            val initialX = (displayMetrics.widthPixels * 0.06).toInt()
+            val initialY = 140
+
+            val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            // Using FLAG_NOT_TOUCH_MODAL allows typing inside floating inputs
+            // while touches outside still reach underlying apps (e.g. WhatsApp).
+            // Removing NO_LIMITS ensures SOFT_INPUT_ADJUST_PAN moves popup above keyboard properly.
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                windowType,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = initialX
+                y = initialY
+                softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN or
+                        WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+            }
+            layoutParams = params
+
+            setupDragAndCloseListeners(view, params)
+            setupOpacityControl(view)
+            setupReportTemplateViews(view)
+
+            windowManager?.addView(view, params)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            stopSelf()
+        }
+    }
+
+    private fun setupOpacityControl(view: View) {
+        val sbOpacity = view.findViewById<SeekBar>(R.id.sb_opacity) ?: return
+        val tvOpacityValue = view.findViewById<TextView>(R.id.tv_opacity_value) ?: return
+
+        // Load saved opacity (default: 0.95f, constrained between 0.35f and 1.0f)
+        val savedOpacity = draftRepository.loadOpacity().coerceIn(0.35f, 1.0f)
+        view.alpha = savedOpacity
+        val initialProgress = (savedOpacity * 100).toInt()
+        sbOpacity.progress = initialProgress
+        tvOpacityValue.text = "${initialProgress}%"
+
+        sbOpacity.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                // Minimum visible opacity is 35% so controls always remain clearly visible and clickable
+                val adjustedProgress = progress.coerceAtLeast(35)
+                if (progress < 35 && fromUser) {
+                    seekBar?.progress = 35
+                    return
+                }
+                val alpha = adjustedProgress / 100f
+                view.alpha = alpha
+                tvOpacityValue.text = "${adjustedProgress}%"
+                if (fromUser) {
+                    draftRepository.saveOpacity(alpha)
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val finalProgress = (seekBar?.progress ?: 95).coerceAtLeast(35)
+                val finalAlpha = finalProgress / 100f
+                draftRepository.saveOpacity(finalAlpha)
+            }
+        })
+    }
+
+    private fun setupDragAndCloseListeners(view: View, params: WindowManager.LayoutParams) {
+        val headerDragArea = view.findViewById<View>(R.id.header_drag_area)
+        val btnCloseHeader = view.findViewById<ImageButton>(R.id.btn_close_header)
+        val btnCloseAction = view.findViewById<Button>(R.id.btn_close_action)
+
+        // Close actions
+        btnCloseHeader.setOnClickListener {
+            stopSelf()
+        }
+
+        btnCloseAction.setOnClickListener {
+            stopSelf()
+        }
+
+        // Dragging listener on the header area
+        var initialX = 0
+        var initialY = 0
+        var touchStartX = 0f
+        var touchStartY = 0f
+
+        headerDragArea.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x
+                    initialY = params.y
+                    touchStartX = event.rawX
+                    touchStartY = event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val deltaX = (event.rawX - touchStartX).toInt()
+                    val deltaY = (event.rawY - touchStartY).toInt()
+                    val displayMetrics = resources.displayMetrics
+                    val maxX = (displayMetrics.widthPixels - dpToPx(160)).coerceAtLeast(0)
+                    val maxY = (displayMetrics.heightPixels - dpToPx(160)).coerceAtLeast(0)
+                    params.x = (initialX + deltaX).coerceIn(0, maxX)
+                    params.y = (initialY + deltaY).coerceIn(0, maxY)
+
+                    try {
+                        windowManager?.updateViewLayout(view, params)
+                    } catch (e: Exception) {
+                        // View may be detached
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun setupReportTemplateViews(view: View) {
+        val etRv = view.findViewById<EditText>(R.id.et_rv)
+        val linesContainer = view.findViewById<LinearLayout>(R.id.lines_container)
+        val btnAddLine = view.findViewById<TextView>(R.id.btn_add_line)
+        val etTpc = view.findViewById<EditText>(R.id.et_tpc)
+        val etLocationName = view.findViewById<EditText>(R.id.et_location_name)
+        val tvGpsPlaceholder = view.findViewById<TextView>(R.id.tv_gps_placeholder)
+        val btnCopyReport = view.findViewById<Button>(R.id.btn_copy_report)
+        val scrollReport = view.findViewById<ScrollView>(R.id.scroll_report)
+
+        // Ensure popup scroll content does not overflow screen boundaries
+        scrollReport?.let { scroll ->
+            val maxScrollHeight = (resources.displayMetrics.heightPixels * 0.62).toInt()
+            scroll.viewTreeObserver.addOnGlobalLayoutListener {
+                if (scroll.height > maxScrollHeight) {
+                    val lp = scroll.layoutParams
+                    if (lp.height != maxScrollHeight) {
+                        lp.height = maxScrollHeight
+                        scroll.layoutParams = lp
+                    }
+                }
+            }
+        }
+
+        // 1. Restore saved draft and dynamic structured lines
+        currentDraft = draftRepository.loadDraft()
+        reportLines = draftRepository.loadReportLines(currentDraft)
+
+        etRv?.setText(currentDraft.rvValue)
+        etTpc?.setText(currentDraft.tpc)
+        etLocationName?.setText(currentDraft.locationName)
+
+        // Function to update the GPS UI pill based on currentDraft or GpsNotificationService
+        fun updateGpsUi() {
+            if (currentDraft.latitude.isNotBlank() && currentDraft.longitude.isNotBlank()) {
+                tvGpsPlaceholder?.text = "${currentDraft.latitude},${currentDraft.longitude}"
+                tvGpsPlaceholder?.setTextColor(0xFF38BDF8.toInt())
+            } else if (GpsNotificationService.lastKnownLatitude.isNotBlank() && GpsNotificationService.lastKnownLongitude.isNotBlank()) {
+                currentDraft.latitude = GpsNotificationService.lastKnownLatitude
+                currentDraft.longitude = GpsNotificationService.lastKnownLongitude
+                draftRepository.saveDraft(currentDraft)
+                tvGpsPlaceholder?.text = "${currentDraft.latitude},${currentDraft.longitude}"
+                tvGpsPlaceholder?.setTextColor(0xFF38BDF8.toInt())
+            } else if (GpsNotificationService.lastKnownGpsCoordinates.isNotBlank()) {
+                val parts = GpsNotificationService.lastKnownGpsCoordinates.split(",")
+                if (parts.size >= 2) {
+                    currentDraft.latitude = parts[0].trim()
+                    currentDraft.longitude = parts[1].trim()
+                    draftRepository.saveDraft(currentDraft)
+                }
+                tvGpsPlaceholder?.text = GpsNotificationService.lastKnownGpsCoordinates
+                tvGpsPlaceholder?.setTextColor(0xFF38BDF8.toInt())
+            } else {
+                tvGpsPlaceholder?.text = "[Live Lat, Long]"
+                tvGpsPlaceholder?.setTextColor(0xFF64748B.toInt())
+            }
+        }
+
+        // Initialize GPS display
+        updateGpsUi()
+
+        // Fetch location if not yet populated
+        if (currentDraft.latitude.isBlank() || currentDraft.longitude.isBlank()) {
+            try {
+                val fusedClient = LocationServices.getFusedLocationProviderClient(this)
+                fusedClient.lastLocation.addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        currentDraft.latitude = String.format(Locale.US, "%.4f", loc.latitude)
+                        currentDraft.longitude = String.format(Locale.US, "%.4f", loc.longitude)
+                        draftRepository.saveDraft(currentDraft)
+                        updateGpsUi()
+                    }
+                }
+            } catch (e: SecurityException) {
+                // Ignore if location permission not active
+            }
+        }
+
+        // Tap on GPS pill to refresh live GPS location
+        tvGpsPlaceholder?.setOnClickListener {
+            try {
+                val fusedClient = LocationServices.getFusedLocationProviderClient(this)
+                fusedClient.lastLocation.addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        currentDraft.latitude = String.format(Locale.US, "%.4f", loc.latitude)
+                        currentDraft.longitude = String.format(Locale.US, "%.4f", loc.longitude)
+                        draftRepository.saveDraft(currentDraft)
+                        updateGpsUi()
+                        Toast.makeText(this, "GPS: ${currentDraft.latitude},${currentDraft.longitude}", Toast.LENGTH_SHORT).show()
+                    } else if (GpsNotificationService.lastKnownLatitude.isNotBlank()) {
+                        currentDraft.latitude = GpsNotificationService.lastKnownLatitude
+                        currentDraft.longitude = GpsNotificationService.lastKnownLongitude
+                        draftRepository.saveDraft(currentDraft)
+                        updateGpsUi()
+                        Toast.makeText(this, "GPS: ${currentDraft.latitude},${currentDraft.longitude}", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "GPS unavailable. Turn on location.", Toast.LENGTH_SHORT).show()
+                    }
+                }.addOnFailureListener {
+                    Toast.makeText(this, "GPS unavailable", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: SecurityException) {
+                Toast.makeText(this, "Location permission required", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        linesContainerView = linesContainer
+
+        // Render dynamic lines inside container
+        if (linesContainer != null) {
+            renderReportLines(linesContainer)
+        }
+
+        // Add line button (+ Add Line)
+        btnAddLine?.setOnClickListener {
+            if (linesContainer != null) {
+                val newIndex = reportLines.size
+                reportLines.add(ReportLineItem(type = ReportLineType.CUSTOM, text = ""))
+                draftRepository.saveReportLines(reportLines)
+                draftRepository.saveDraft(currentDraft)
+                renderReportLines(linesContainer, focusIndex = newIndex)
+            }
+        }
+
+        // Auto-save listeners for header & footer fields
+        etRv?.addTextChangedListener(SimpleTextWatcher { s ->
+            currentDraft.rvValue = s
+            draftRepository.saveDraft(currentDraft)
+        })
+
+        etTpc?.addTextChangedListener(SimpleTextWatcher { s ->
+            currentDraft.tpc = s
+            draftRepository.saveDraft(currentDraft)
+        })
+
+        etLocationName?.addTextChangedListener(SimpleTextWatcher { s ->
+            currentDraft.locationName = s
+            draftRepository.saveDraft(currentDraft)
+        })
+
+        // Copy Report Action (Part 7: Validation, Vibration, Red Highlight, Force-Copy, and Toast)
+        btnCopyReport?.setOnClickListener {
+            val missingIndices = getMissingRequiredLineIndices()
+            if (missingIndices.isNotEmpty() && !forceCopyAllowed) {
+                // First attempt with missing fields: warn, vibrate, highlight in RED, don't copy
+                forceCopyAllowed = true
+                currentErrorIndices = missingIndices
+                triggerLongVibration()
+
+                if (linesContainerView != null) {
+                    renderReportLines(linesContainerView!!, errorIndices = missingIndices)
+                }
+
+                Toast.makeText(this, "Required fields missing! Tap Copy again to force copy", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // Either all required fields are complete OR this is the 2nd attempt (force-copy allowed):
+            forceCopyAllowed = false
+            currentErrorIndices = emptySet()
+            if (linesContainerView != null) {
+                renderReportLines(linesContainerView!!, errorIndices = emptySet())
+            }
+
+            val gpsText = tvGpsPlaceholder?.text?.toString()
+                ?.replace("[", "")?.replace("]", "")?.trim().orEmpty()
+            val fullReport = draftRepository.formatReportText(currentDraft, reportLines, gpsText)
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clip = ClipData.newPlainText("Field Work Report", fullReport)
+            clipboard?.setPrimaryClip(clip)
+
+            // Short visual confirmation
+            Toast.makeText(this, "Report Copied", Toast.LENGTH_SHORT).show()
+
+            // Visual feedback on the button itself
+            btnCopyReport.text = "Report Copied ✓"
+            btnCopyReport.postDelayed({
+                btnCopyReport.text = "Copy Report"
+            }, 1800)
+        }
+    }
+
+    private fun renderReportLines(
+        container: LinearLayout,
+        focusIndex: Int? = null,
+        errorIndices: Set<Int> = currentErrorIndices
+    ) {
+        container.removeAllViews()
+        val inflater = LayoutInflater.from(this)
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        var viewToFocus: View? = null
+
+        reportLines.forEachIndexed { index, line ->
+            val rowView = inflater.inflate(R.layout.item_report_line, container, false)
+            val tvLineNum = rowView.findViewById<TextView>(R.id.tv_line_num)
+            val containerContent = rowView.findViewById<FrameLayout>(R.id.container_content)
+            val btnDelete = rowView.findViewById<ImageButton>(R.id.btn_delete_line)
+
+            tvLineNum.text = "${index + 1}) "
+
+            val isError = index in errorIndices
+            if (isError) {
+                rowView.setBackgroundResource(R.drawable.floating_row_error_bg)
+                tvLineNum.setTextColor(0xFFEF4444.toInt())
+            } else {
+                rowView.background = null
+                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+            }
+
+            btnDelete.setOnClickListener {
+                if (index < reportLines.size) {
+                    reportLines.removeAt(index)
+                    draftRepository.saveReportLines(reportLines)
+                    draftRepository.saveDraft(currentDraft)
+                    renderReportLines(container)
+                }
+            }
+
+            fun onEnterPressed() {
+                val nextIndex = index + 1
+                reportLines.add(nextIndex, ReportLineItem(type = ReportLineType.CUSTOM, text = ""))
+                draftRepository.saveReportLines(reportLines)
+                draftRepository.saveDraft(currentDraft)
+                renderReportLines(container, focusIndex = nextIndex)
+            }
+
+            when (line.type) {
+                ReportLineType.APPLICANT -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val label = TextView(this).apply {
+                        text = "Applicant:- "
+                        setTextColor(0xFFE2E8F0.toInt())
+                        textSize = 13f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    }
+                    val inputBg = if (isError && line.text.trim().isEmpty()) R.drawable.floating_input_error_bg else R.drawable.floating_input_bg
+                    val et = EditText(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, dpToPx(32), 1f)
+                        background = getDrawable(inputBg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "____________"
+                        textSize = 13f
+                        setSingleLine(true)
+                        setPadding(dpToPx(8), 0, dpToPx(8), 0)
+                        setText(line.text)
+                        imeOptions = EditorInfo.IME_ACTION_NEXT
+
+                        addTextChangedListener(SimpleTextWatcher { s ->
+                            line.text = s
+                            currentDraft.applicantName = s
+                            if (s.trim().isNotEmpty() && currentErrorIndices.contains(index)) {
+                                currentErrorIndices = currentErrorIndices - index
+                                rowView.background = null
+                                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+                                background = getDrawable(R.drawable.floating_input_bg)
+                            }
+                            draftRepository.saveReportLines(reportLines)
+                            draftRepository.saveDraft(currentDraft)
+                        })
+
+                        setOnEditorActionListener { _, actionId, event ->
+                            if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+                                (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
+                                onEnterPressed()
+                                true
+                            } else false
+                        }
+                    }
+                    rowLayout.addView(label)
+                    rowLayout.addView(et)
+                    containerContent.addView(rowLayout)
+                    if (focusIndex == index) viewToFocus = et
+                }
+
+                ReportLineType.MALNAR -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val label = TextView(this).apply {
+                        text = "Malnar:- "
+                        setTextColor(0xFFE2E8F0.toInt())
+                        textSize = 13f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    }
+                    val currentVal = if (line.text.isNotBlank()) line.text else "Self"
+                    val inputBg = if (isError && line.text.trim().isEmpty()) R.drawable.floating_input_error_bg else R.drawable.floating_input_bg
+                    val et = EditText(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, dpToPx(32), 1f)
+                        background = getDrawable(inputBg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "Self"
+                        textSize = 13f
+                        setSingleLine(true)
+                        setPadding(dpToPx(8), 0, dpToPx(8), 0)
+                        setText(currentVal)
+                        imeOptions = EditorInfo.IME_ACTION_NEXT
+
+                        setOnFocusChangeListener { _, hasFocus ->
+                            if (hasFocus) {
+                                if (text.toString().trim().equals("Self", ignoreCase = true)) {
+                                    post { selectAll() }
+                                }
+                            } else {
+                                if (text.toString().trim().isEmpty()) {
+                                    setText("Self")
+                                    line.text = "Self"
+                                    currentDraft.malnar = "Self"
+                                    draftRepository.saveReportLines(reportLines)
+                                    draftRepository.saveDraft(currentDraft)
+                                }
+                            }
+                        }
+
+                        setOnClickListener {
+                            if (text.toString().trim().equals("Self", ignoreCase = true)) {
+                                selectAll()
+                            }
+                        }
+
+                        addTextChangedListener(SimpleTextWatcher { s ->
+                            val trimmed = s.trim()
+                            line.text = trimmed
+                            currentDraft.malnar = if (trimmed.isEmpty()) "Self" else trimmed
+                            if (trimmed.isNotEmpty() && currentErrorIndices.contains(index)) {
+                                currentErrorIndices = currentErrorIndices - index
+                                rowView.background = null
+                                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+                                background = getDrawable(R.drawable.floating_input_bg)
+                            }
+                            draftRepository.saveReportLines(reportLines)
+                            draftRepository.saveDraft(currentDraft)
+                        })
+
+                        setOnEditorActionListener { _, actionId, event ->
+                            if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+                                (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
+                                onEnterPressed()
+                                true
+                            } else false
+                        }
+                    }
+                    rowLayout.addView(label)
+                    rowLayout.addView(et)
+                    containerContent.addView(rowLayout)
+                    if (focusIndex == index) viewToFocus = et
+                }
+
+                ReportLineType.FAMILY -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val label = TextView(this).apply {
+                        text = "Family:- "
+                        setTextColor(0xFFE2E8F0.toInt())
+                        textSize = 13f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    }
+                    val totalBg = if (isError && line.text.trim().isEmpty()) R.drawable.floating_input_error_bg else R.drawable.floating_input_bg
+                    val earningBg = if (isError && line.extraData.trim().isEmpty()) R.drawable.floating_input_error_bg else R.drawable.floating_input_bg
+
+                    val etTotal = EditText(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(dpToPx(44), dpToPx(32))
+                        background = getDrawable(totalBg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "04"
+                        gravity = Gravity.CENTER
+                        inputType = InputType.TYPE_CLASS_NUMBER
+                        filters = arrayOf(InputFilter.LengthFilter(3))
+                        textSize = 13f
+                        setText(line.text)
+                    }
+                    val separator = TextView(this).apply {
+                        text = "_"
+                        setTextColor(0xFF38BDF8.toInt())
+                        textSize = 14f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                        setPadding(dpToPx(4), 0, dpToPx(4), 0)
+                    }
+                    val etEarning = EditText(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(dpToPx(44), dpToPx(32))
+                        background = getDrawable(earningBg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "02"
+                        gravity = Gravity.CENTER
+                        inputType = InputType.TYPE_CLASS_NUMBER
+                        filters = arrayOf(InputFilter.LengthFilter(3))
+                        textSize = 13f
+                        setText(line.extraData)
+                        imeOptions = EditorInfo.IME_ACTION_NEXT
+                    }
+
+                    etTotal.addTextChangedListener(SimpleTextWatcher { s ->
+                        line.text = s
+                        currentDraft.familyTotal = s
+                        if (s.trim().isNotEmpty()) {
+                            etTotal.background = getDrawable(R.drawable.floating_input_bg)
+                            if (line.extraData.trim().isNotEmpty() && currentErrorIndices.contains(index)) {
+                                currentErrorIndices = currentErrorIndices - index
+                                rowView.background = null
+                                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+                            }
+                        }
+                        draftRepository.saveReportLines(reportLines)
+                        draftRepository.saveDraft(currentDraft)
+                        if (s.length >= 2 && etTotal.hasFocus()) {
+                            etEarning.requestFocus()
+                        }
+                    })
+
+                    etEarning.addTextChangedListener(SimpleTextWatcher { s ->
+                        line.extraData = s
+                        currentDraft.familyEarning = s
+                        if (s.trim().isNotEmpty()) {
+                            etEarning.background = getDrawable(R.drawable.floating_input_bg)
+                            if (line.text.trim().isNotEmpty() && currentErrorIndices.contains(index)) {
+                                currentErrorIndices = currentErrorIndices - index
+                                rowView.background = null
+                                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+                            }
+                        }
+                        draftRepository.saveReportLines(reportLines)
+                        draftRepository.saveDraft(currentDraft)
+                    })
+
+                    etEarning.setOnEditorActionListener { _, actionId, event ->
+                        if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+                            (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
+                            onEnterPressed()
+                            true
+                        } else false
+                    }
+
+                    rowLayout.addView(label)
+                    rowLayout.addView(etTotal)
+                    rowLayout.addView(separator)
+                    rowLayout.addView(etEarning)
+                    containerContent.addView(rowLayout)
+                    if (focusIndex == index) viewToFocus = etTotal
+                }
+
+                ReportLineType.HOME_TYPE -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val currentText = if (line.text.isNotBlank()) line.text else "Home Tenement"
+                    val tvToggle = TextView(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dpToPx(32))
+                        background = getDrawable(R.drawable.floating_input_bg)
+                        setTextColor(0xFF38BDF8.toInt())
+                        textSize = 13f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dpToPx(10), 0, dpToPx(10), 0)
+                        text = currentText
+                        isClickable = true
+                        setOnClickListener {
+                            val nextVal = if (line.text == "Home Tenement") "Home Semipack" else "Home Tenement"
+                            line.text = nextVal
+                            currentDraft.homeType = nextVal
+                            text = nextVal
+                            draftRepository.saveReportLines(reportLines)
+                            draftRepository.saveDraft(currentDraft)
+                        }
+                    }
+                    rowLayout.addView(tvToggle)
+                    containerContent.addView(rowLayout)
+                }
+
+                ReportLineType.RESIDENCE -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val yearsBg = if (isError && line.text.trim().isEmpty()) R.drawable.floating_input_error_bg else R.drawable.floating_input_bg
+                    val etYears = EditText(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(dpToPx(48), dpToPx(32))
+                        background = getDrawable(yearsBg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "29"
+                        gravity = Gravity.CENTER
+                        inputType = InputType.TYPE_CLASS_NUMBER
+                        filters = arrayOf(InputFilter.LengthFilter(3))
+                        textSize = 13f
+                        setText(line.text)
+                        imeOptions = EditorInfo.IME_ACTION_NEXT
+
+                        addTextChangedListener(SimpleTextWatcher { s ->
+                            line.text = s
+                            currentDraft.residenceYears = s
+                            if (s.trim().isNotEmpty() && currentErrorIndices.contains(index)) {
+                                currentErrorIndices = currentErrorIndices - index
+                                rowView.background = null
+                                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+                                background = getDrawable(R.drawable.floating_input_bg)
+                            }
+                            draftRepository.saveReportLines(reportLines)
+                            draftRepository.saveDraft(currentDraft)
+                        })
+
+                        setOnEditorActionListener { _, actionId, event ->
+                            if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+                                (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
+                                onEnterPressed()
+                                true
+                            } else false
+                        }
+                    }
+                    val suffix = TextView(this).apply {
+                        text = " year thi ahiya rahe chhe"
+                        setTextColor(0xFFE2E8F0.toInt())
+                        textSize = 12f
+                    }
+                    rowLayout.addView(etYears)
+                    rowLayout.addView(suffix)
+                    containerContent.addView(rowLayout)
+                    if (focusIndex == index) viewToFocus = etYears
+                }
+
+                ReportLineType.HOME_OWNERSHIP -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val currentText = if (currentDraft.isHomeRent) "Home rent par chhe" else "Home potanu chhe"
+                    val tvToggle = TextView(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dpToPx(32))
+                        background = getDrawable(R.drawable.floating_input_bg)
+                        setTextColor(0xFF38BDF8.toInt())
+                        textSize = 13f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dpToPx(10), 0, dpToPx(10), 0)
+                        text = currentText
+                        isClickable = true
+                        setOnClickListener {
+                            if (!currentDraft.isHomeRent) {
+                                // Switch to Rent
+                                currentDraft.isHomeRent = true
+                                line.text = "Home rent par chhe"
+                                if (index + 1 < reportLines.size) {
+                                    val next = reportLines[index + 1]
+                                    if (next.type == ReportLineType.CUSTOM) {
+                                        currentDraft.extraInfo = next.text
+                                        next.type = ReportLineType.RENT
+                                        next.text = currentDraft.rentAmount
+                                    } else if (next.type == ReportLineType.RENT) {
+                                        next.text = currentDraft.rentAmount
+                                    }
+                                } else {
+                                    reportLines.add(ReportLineItem(type = ReportLineType.RENT, text = currentDraft.rentAmount))
+                                }
+                            } else {
+                                // Switch back to Potanu
+                                currentDraft.isHomeRent = false
+                                currentDraft.rentAmount = "" // Cleared!
+                                line.text = "Home potanu chhe"
+                                if (index + 1 < reportLines.size && reportLines[index + 1].type == ReportLineType.RENT) {
+                                    val next = reportLines[index + 1]
+                                    next.type = ReportLineType.CUSTOM
+                                    next.text = currentDraft.extraInfo
+                                }
+                            }
+                            draftRepository.saveDraft(currentDraft)
+                            draftRepository.saveReportLines(reportLines)
+                            renderReportLines(container)
+                        }
+                    }
+                    rowLayout.addView(tvToggle)
+                    containerContent.addView(rowLayout)
+                }
+
+                ReportLineType.RENT -> {
+                    val rowLayout = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val label = TextView(this).apply {
+                        text = "rent:- "
+                        setTextColor(0xFFE2E8F0.toInt())
+                        textSize = 13f
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    }
+                    val rentBg = if (isError && line.text.trim().isEmpty()) R.drawable.floating_input_error_bg else R.drawable.floating_input_bg
+                    val etRent = EditText(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(dpToPx(72), dpToPx(32))
+                        background = getDrawable(rentBg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "5000"
+                        gravity = Gravity.CENTER
+                        inputType = InputType.TYPE_CLASS_NUMBER
+                        filters = arrayOf(InputFilter.LengthFilter(7))
+                        textSize = 13f
+                        setText(line.text)
+                        imeOptions = EditorInfo.IME_ACTION_NEXT
+
+                        addTextChangedListener(SimpleTextWatcher { s ->
+                            line.text = s.trim()
+                            currentDraft.rentAmount = line.text
+                            if (line.text.isNotEmpty() && currentErrorIndices.contains(index)) {
+                                currentErrorIndices = currentErrorIndices - index
+                                rowView.background = null
+                                tvLineNum.setTextColor(0xFF38BDF8.toInt())
+                                background = getDrawable(R.drawable.floating_input_bg)
+                            }
+                            draftRepository.saveReportLines(reportLines)
+                            draftRepository.saveDraft(currentDraft)
+                        })
+
+                        setOnEditorActionListener { _, actionId, event ->
+                            if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+                                (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
+                                onEnterPressed()
+                                true
+                            } else false
+                        }
+                    }
+                    val suffix = TextView(this).apply {
+                        text = " rs per month"
+                        setTextColor(0xFFE2E8F0.toInt())
+                        textSize = 12f
+                    }
+                    rowLayout.addView(label)
+                    rowLayout.addView(etRent)
+                    rowLayout.addView(suffix)
+                    containerContent.addView(rowLayout)
+                    if (focusIndex == index) viewToFocus = etRent
+                }
+
+                ReportLineType.CUSTOM -> {
+                    val etCustom = EditText(this).apply {
+                        layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dpToPx(32))
+                        background = getDrawable(R.drawable.floating_input_bg)
+                        setTextColor(0xFFFFFFFF.toInt())
+                        setHintTextColor(0xFF475569.toInt())
+                        hint = "__________________"
+                        textSize = 13f
+                        setSingleLine(true)
+                        setPadding(dpToPx(8), 0, dpToPx(8), 0)
+                        setText(line.text)
+                        imeOptions = EditorInfo.IME_ACTION_NEXT
+
+                        addTextChangedListener(SimpleTextWatcher { s ->
+                            line.text = s
+                            draftRepository.saveReportLines(reportLines)
+                        })
+
+                        setOnEditorActionListener { _, actionId, event ->
+                            if (actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_ACTION_DONE ||
+                                (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)) {
+                                onEnterPressed()
+                                true
+                            } else false
+                        }
+
+                        setOnKeyListener { _, keyCode, event ->
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                if (keyCode == KeyEvent.KEYCODE_ENTER) {
+                                    onEnterPressed()
+                                    true
+                                } else if (keyCode == KeyEvent.KEYCODE_DEL && line.text.isEmpty() && reportLines.size > 1) {
+                                    reportLines.removeAt(index)
+                                    draftRepository.saveReportLines(reportLines)
+                                    val targetIdx = (index - 1).coerceAtLeast(0)
+                                    renderReportLines(container, focusIndex = targetIdx)
+                                    true
+                                } else false
+                            } else false
+                        }
+                    }
+                    containerContent.addView(etCustom)
+                    if (focusIndex == index) viewToFocus = etCustom
+                }
+            }
+
+            container.addView(rowView)
+        }
+
+        if (viewToFocus != null && viewToFocus is EditText) {
+            val et = viewToFocus as EditText
+            et.post {
+                et.requestFocus()
+                et.setSelection(et.text.length)
+                imm?.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
+    }
+
+    private fun removeFloatingPopup() {
+        try {
+            floatingView?.let { view ->
+                if (view.isAttachedToWindow) {
+                    windowManager?.removeView(view)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            floatingView = null
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Field Work Floating Window",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Active when Field Work floating popup overlay is shown"
+                setShowBadge(false)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildForegroundNotification(): Notification {
+        // Intent to launch the app if user taps the notification body
+        val appIntent = Intent(this, MainActivity::class.java)
+        val appPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            appIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Intent to close the floating popup directly from notification
+        val closeIntent = Intent(this, FieldFloatingService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val closePendingIntent = PendingIntent.getService(
+            this,
+            1,
+            closeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_quick_tile)
+            .setContentTitle(getString(R.string.floating_service_notification_title))
+            .setContentText(getString(R.string.floating_service_notification_text))
+            .setContentIntent(appPendingIntent)
+            .setOngoing(true)
+            .addAction(R.drawable.ic_close, "Close", closePendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Save current draft state safely before teardown
+        try {
+            if (::draftRepository.isInitialized) {
+                draftRepository.saveDraft(currentDraft)
+                draftRepository.saveReportLines(reportLines)
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+        removeFloatingPopup()
+        isRunning = false
+        FieldWorkTileService.requestListeningState(this)
+    }
+
+    companion object {
+        const val ACTION_START = "com.whatsapptoexcel.app.action.START_FLOATING"
+        const val ACTION_STOP = "com.whatsapptoexcel.app.action.STOP_FLOATING"
+        const val ACTION_TOGGLE = "com.whatsapptoexcel.app.action.TOGGLE_FLOATING"
+
+        private const val CHANNEL_ID = "field_work_floating_channel"
+        private const val NOTIFICATION_ID = 2001
+
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+
+        fun startService(context: Context) {
+            val intent = Intent(context, FieldFloatingService::class.java).apply {
+                action = ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stopService(context: Context) {
+            val intent = Intent(context, FieldFloatingService::class.java).apply {
+                action = ACTION_STOP
+            }
+            context.startService(intent)
+        }
+    }
+}
+
+/**
+ * Reusable helper TextWatcher that simplifies listening to afterTextChanged.
+ */
+private class SimpleTextWatcher(private val onAfterTextChanged: (String) -> Unit) : TextWatcher {
+    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+    override fun onTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+    override fun afterTextChanged(s: Editable?) {
+        onAfterTextChanged(s?.toString().orEmpty())
+    }
+}
