@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/floating_root"
+    android:layout_width="335dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/floating_popup_bg"
+    android:padding="12dp"
+    android:elevation="14dp">
+
+    <!-- Header / Drag Bar -->
+    <LinearLayout
+        android:id="@+id/header_drag_area"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:clickable="true"
+        android:focusable="false">
+
+        <ImageView
+            android:id="@+id/img_drag_handle"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_drag_handle"
+            android:contentDescription="Drag handle" />
+
+        <TextView
+            android:id="@+id/tv_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="Field Work Report"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/tv_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="PART 10"
+            android:textColor="#38BDF8"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:background="@drawable/floating_popup_btn_bg"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:layout_marginEnd="6dp" />
+
+        <ImageButton
+            android:id="@+id/btn_close_header"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_close"
+            android:contentDescription="Close popup"
+            android:padding="3dp" />
+    </LinearLayout>
+
+    <!-- Opacity / Transparency Control Bar (Part 4) -->
+    <LinearLayout
+        android:id="@+id/layout_opacity_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="4dp"
+        android:paddingHorizontal="2dp">
+
+        <ImageView
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:src="@drawable/ic_opacity"
+            android:contentDescription="Opacity" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="Opacity"
+            android:textColor="#94A3B8"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <SeekBar
+            android:id="@+id/sb_opacity"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:max="100"
+            android:progress="95"
+            android:progressTint="#38BDF8"
+            android:thumbTint="#38BDF8"
+            android:progressBackgroundTint="#475569"
+            android:paddingHorizontal="6dp" />
+
+        <TextView
+            android:id="@+id/tv_opacity_value"
+            android:layout_width="32dp"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:text="95%"
+            android:textColor="#38BDF8"
+            android:textStyle="bold"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Subtle divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#334155"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="6dp" />
+
+    <!-- Scrollable Report Template Container -->
+    <ScrollView
+        android:id="@+id/scroll_report"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="true"
+        android:scrollbars="none"
+        android:overScrollMode="never">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- R.V (____________) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="R.V ("
+                    android:textColor="#38BDF8"
+                    android:textStyle="bold"
+                    android:textSize="13sp" />
+
+                <EditText
+                    android:id="@+id/et_rv"
+                    android:layout_width="0dp"
+                    android:layout_height="32dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/floating_input_bg"
+                    android:paddingHorizontal="8dp"
+                    android:textColor="#38BDF8"
+                    android:textStyle="bold"
+                    android:hint="Truhome fin"
+                    android:hintTextColor="#475569"
+                    android:textSize="13sp"
+                    android:singleLine="true"
+                    android:imeOptions="actionNext" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=")"
+                    android:textColor="#38BDF8"
+                    android:textStyle="bold"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- Dynamic Numbered Report Lines Container (Part 5) -->
+            <LinearLayout
+                android:id="@+id/lines_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <!-- Add Line Quick Action -->
+            <TextView
+                android:id="@+id/btn_add_line"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:background="@drawable/floating_btn_small_bg"
+                android:paddingHorizontal="10dp"
+                android:gravity="center_vertical"
+                android:text="+ Add Line"
+                android:textColor="#38BDF8"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="8dp"
+                android:clickable="true"
+                android:focusable="false" />
+
+            <!-- TPC. ____________ -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="TPC. "
+                    android:textColor="#E2E8F0"
+                    android:textStyle="bold"
+                    android:textSize="13sp" />
+
+                <EditText
+                    android:id="@+id/et_tpc"
+                    android:layout_width="0dp"
+                    android:layout_height="32dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/floating_input_bg"
+                    android:paddingHorizontal="8dp"
+                    android:textColor="#FFFFFF"
+                    android:hint="Hareshbhai"
+                    android:hintTextColor="#475569"
+                    android:textSize="13sp"
+                    android:singleLine="true"
+                    android:imeOptions="actionNext" />
+            </LinearLayout>
+
+            <!-- # ____________   ____________ (Location placeholder) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="# "
+                    android:textColor="#38BDF8"
+                    android:textStyle="bold"
+                    android:textSize="14sp" />
+
+                <EditText
+                    android:id="@+id/et_location_name"
+                    android:layout_width="0dp"
+                    android:layout_height="32dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/floating_input_bg"
+                    android:paddingHorizontal="8dp"
+                    android:textColor="#FFFFFF"
+                    android:hint="Jasdan"
+                    android:hintTextColor="#475569"
+                    android:textSize="13sp"
+                    android:singleLine="true"
+                    android:imeOptions="actionDone" />
+
+                <Space
+                    android:layout_width="6dp"
+                    android:layout_height="1dp" />
+
+                <TextView
+                    android:id="@+id/tv_gps_placeholder"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:background="@drawable/floating_input_bg"
+                    android:paddingHorizontal="8dp"
+                    android:gravity="center_vertical"
+                    android:textColor="#64748B"
+                    android:textSize="11sp"
+                    android:text="[Live Lat, Long]" />
+            </LinearLayout>
+
+            <!-- Action Buttons: Copy Report & Close -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="2dp">
+
+                <Button
+                    android:id="@+id/btn_copy_report"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:text="Copy Report"
+                    android:textColor="#38BDF8"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/floating_popup_btn_bg"
+                    android:layout_marginEnd="6dp" />
+
+                <Button
+                    android:id="@+id/btn_close_action"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:text="Close"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/floating_popup_btn_bg" />
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>

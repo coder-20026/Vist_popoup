@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/row_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:layout_marginBottom="6dp">
+
+    <!-- Dynamically rendered line number (e.g. 1), 2), 3)...) -->
+    <TextView
+        android:id="@+id/tv_line_num"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="1) "
+        android:textColor="#38BDF8"
+        android:textStyle="bold"
+        android:textSize="13sp"
+        android:minWidth="24dp" />
+
+    <!-- Container where specific field type UI is inflated/mounted -->
+    <FrameLayout
+        android:id="@+id/container_content"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1" />
+
+    <!-- Delete button for dynamic row removal -->
+    <ImageButton
+        android:id="@+id/btn_delete_line"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:layout_marginStart="4dp"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:src="@drawable/ic_delete"
+        android:alpha="0.85"
+        android:contentDescription="Delete line"
+        android:padding="6dp" />
+
+</LinearLayout>
