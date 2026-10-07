@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Field Work</string>
+    <string name="quick_tile_label">Field Work</string>
+    <string name="quick_tile_desc">Field Work Floating Assistant</string>
+    <string name="floating_service_notification_title">Field Work Floating Popup</string>
+    <string name="floating_service_notification_text">Floating window active • Tap to manage</string>
 </resources>
